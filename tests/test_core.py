@@ -1,4 +1,7 @@
+import asyncio
+
 from app.conversation import ConversationStore
+from app.main import _AUDIO_ID_RE
 from app.text_utils import text_for_speech
 
 
@@ -12,6 +15,22 @@ def test_history_is_trimmed_by_turn() -> None:
         {"role": "user", "content": "u2"},
         {"role": "assistant", "content": "a2"},
     ]
+
+
+def test_reset_preserves_session_lock() -> None:
+    store = ConversationStore(history_turns=2)
+    original_lock = store.lock("s")
+    store.append_turn("s", "hello", "hi")
+    store.reset("s")
+    assert store.messages("s") == []
+    assert store.lock("s") is original_lock
+    assert isinstance(original_lock, asyncio.Lock)
+
+
+def test_audio_id_pattern_is_exact() -> None:
+    assert _AUDIO_ID_RE.fullmatch("a" * 32 + ".mp3")
+    assert not _AUDIO_ID_RE.fullmatch("../" + "a" * 32 + ".mp3")
+    assert not _AUDIO_ID_RE.fullmatch("a.mp3")
 
 
 def test_tts_cleanup_removes_markdown_and_code() -> None:
