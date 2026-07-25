@@ -1,0 +1,7 @@
+services:
+  kokoro:
+    image: ghcr.io/remsky/kokoro-fastapi-cpu:latest
+    container_name: live-voice-lite-kokoro
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8880:8880"

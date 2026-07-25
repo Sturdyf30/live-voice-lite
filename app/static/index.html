@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Live Voice Lite</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">SELF-HOSTED VOICE</p>
+        <h1>Live Voice Lite</h1>
+      </div>
+      <div class="top-actions">
+        <button id="resetButton" class="ghost">New conversation</button>
+        <button id="settingsButton" class="ghost" aria-expanded="false">Settings</button>
+      </div>
+    </header>
+
+    <section id="settingsPanel" class="settings hidden">
+      <label>
+        Voice
+        <input id="voiceInput" value="af_heart" spellcheck="false" />
+      </label>
+      <label>
+        Speed <span id="speedValue">1.05×</span>
+        <input id="speedInput" type="range" min="0.75" max="1.5" step="0.05" value="1.05" />
+      </label>
+      <label class="toggle-row">
+        <span>Hands-free silence detection</span>
+        <input id="autoToggle" type="checkbox" />
+      </label>
+      <p id="backendSummary" class="backend-summary">Checking backend…</p>
+    </section>
+
+    <section class="voice-stage" aria-live="polite">
+      <div id="orb" class="orb idle">
+        <div class="orb-core"></div>
+      </div>
+      <p id="status" class="status">Hold the button or Space to talk</p>
+      <p id="latency" class="latency"></p>
+      <div class="controls">
+        <button id="micButton" class="mic" aria-label="Hold to talk">
+          <span class="mic-icon">●</span>
+          <span id="micLabel">Hold to talk</span>
+        </button>
+        <button id="interruptButton" class="interrupt hidden">Stop speaking</button>
+      </div>
+      <p class="hint">In hands-free mode, click once and pause when finished. Speaking again interrupts playback.</p>
+    </section>
+
+    <section id="transcript" class="transcript" aria-label="Conversation transcript"></section>
+
+    <form id="textForm" class="text-form">
+      <input id="textInput" autocomplete="off" placeholder="Or type a message…" />
+      <button type="submit">Send</button>
+    </form>
+  </main>
+  <script src="/static/app.js" defer></script>
+</body>
+</html>
