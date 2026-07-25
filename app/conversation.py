@@ -40,5 +40,6 @@ class ConversationStore:
         conversation.updated_at = datetime.now(UTC)
 
     def reset(self, session_id: str) -> None:
+        # Keep the per-session lock object. Removing it while an active turn holds
+        # the old lock could allow a second request to run concurrently.
         self._sessions.pop(session_id, None)
-        self._locks.pop(session_id, None)

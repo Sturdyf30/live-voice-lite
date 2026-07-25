@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import re
 import time
 import uuid
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
+import httpx
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -17,11 +20,13 @@ from .llm import LanguageModel
 from .stt import SpeechToText
 from .tts import TextToSpeech
 
+logger = logging.getLogger(__name__)
 settings = get_settings()
 store = ConversationStore(settings.history_turns)
 stt = SpeechToText(settings)
 llm = LanguageModel(settings)
 tts = TextToSpeech(settings)
+_AUDIO_ID_RE = re.compile(r"^[0-9a-f]{32}\.mp3$")
 
 
 class TextTurn(BaseModel):
@@ -62,15 +67,48 @@ async def index() -> FileResponse:
     return FileResponse(STATIC_DIR / "index.html")
 
 
+async def probe_http_service(url: str, *, headers: dict[str, str] | None = None) -> dict:
+    started = time.perf_counter()
+    try:
+        async with httpx.AsyncClient(timeout=2.5) as client:
+            response = await client.get(url, headers=headers)
+        reachable = response.status_code < 500
+        return {
+            "reachable": reachable,
+            "status_code": response.status_code,
+            "latency_ms": round((time.perf_counter() - started) * 1000),
+        }
+    except Exception as exc:
+        return {
+            "reachable": False,
+            "error": f"{type(exc).__name__}: {exc}",
+            "latency_ms": round((time.perf_counter() - started) * 1000),
+        }
+
+
 @app.get("/api/health")
 async def health() -> dict:
+    llm_headers = {}
+    if settings.llm_api_key:
+        llm_headers["Authorization"] = f"Bearer {settings.llm_api_key}"
+
+    llm_probe_url = f"{settings.llm_base_url}/models"
+    tts_probe_url = f"{settings.tts_base_url}/models"
+    llm_status, tts_status = await asyncio.gather(
+        probe_http_service(llm_probe_url, headers=llm_headers),
+        probe_http_service(tts_probe_url)
+        if settings.tts_backend != "disabled"
+        else asyncio.sleep(0, result={"reachable": True, "disabled": True}),
+    )
+
     return {
-        "ok": True,
+        "ok": bool(llm_status["reachable"] and tts_status["reachable"]),
         "name": settings.app_name,
         "llm": {
             "backend": settings.llm_backend,
             "base_url": settings.llm_base_url,
             "model": settings.llm_model,
+            "status": llm_status,
         },
         "stt": {"backend": settings.stt_backend, "model": settings.stt_model},
         "tts": {
@@ -79,6 +117,7 @@ async def health() -> dict:
             "model": settings.tts_model,
             "voice": settings.tts_voice,
             "speed": settings.tts_speed,
+            "status": tts_status,
         },
         "limits": {
             "max_upload_mb": settings.max_upload_mb,
@@ -96,7 +135,6 @@ def validate_session_id(session_id: str) -> str:
 
 async def probe_audio_duration(audio_path: Path) -> float | None:
     """Return media duration using ffprobe, or None when ffprobe is unavailable."""
-
     try:
         process = await asyncio.create_subprocess_exec(
             "ffprobe",
@@ -141,6 +179,7 @@ async def run_turn(
     if not user_text:
         raise HTTPException(status_code=400, detail="No speech or text was detected.")
 
+    warnings: list[str] = []
     async with store.lock(session_id):
         llm_started = time.perf_counter()
         assistant_text = await llm.respond(store.messages(session_id), user_text)
@@ -153,17 +192,13 @@ async def run_turn(
             audio_path = settings.audio_dir / audio_id
             tts_started = time.perf_counter()
             try:
-                await tts.synthesize(
-                    assistant_text,
-                    audio_path,
-                    voice=voice,
-                    speed=speed,
-                )
+                await tts.synthesize(assistant_text, audio_path, voice=voice, speed=speed)
                 timing["tts_ms"] = round((time.perf_counter() - tts_started) * 1000)
-            except Exception:
-                # A dead TTS service should not destroy a useful model response.
+            except Exception as exc:
+                logger.warning("TTS synthesis failed: %s", exc)
                 audio_id = None
                 timing["tts_ms"] = -1
+                warnings.append(f"TTS unavailable: {exc}")
 
     timing["total_ms"] = round(sum(value for value in timing.values() if value > 0))
     return {
@@ -171,6 +206,7 @@ async def run_turn(
         "assistant_text": assistant_text,
         "audio_url": f"/audio/{audio_id}" if audio_id else None,
         "timing": timing,
+        "warnings": warnings,
     }
 
 
@@ -248,7 +284,7 @@ async def reset(session_id: str) -> dict:
 
 @app.get("/audio/{audio_id}")
 async def audio_file(audio_id: str) -> FileResponse:
-    if not audio_id.endswith(".mp3") or any(char not in "0123456789abcdef.mp3" for char in audio_id):
+    if not _AUDIO_ID_RE.fullmatch(audio_id):
         raise HTTPException(status_code=404, detail="Audio not found.")
     path = settings.audio_dir / audio_id
     if not path.is_file():
